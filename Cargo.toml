@@ -1,0 +1,44 @@
+[package]
+name = "psilo-ecs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+arcow = "1.0.0"
+log = "0.4"
+parking_lot = "0.12"
+primal = {version = "0.2", optional = true}
+rand = {version = "0.8.5", optional = true}
+
+[features]
+default = []
+# Remove some runtime checks for extra speeeeeeeed
+gotta-go-fast = []
+# Use usize instead of u32 for offsets and sizes in EcHashMap.
+# If you're not getting panics due to arithmetic overflow, this will do NOTHING
+# except waste memory; and if you *are* getting panics due to arithmetic
+# overflow, you are probably doing something ridiculous. Having this feature
+# disabled does NOT prevent the *overall* size of an EcHashMap from exceeding
+# 4GB, it only prevents an *individual bucket* of an EcHashMap from exceeding
+# 4GB.
+use-usize = []
+# Use 64-bit EntityIDs instead of 32-bit ones. This has two effects:
+# - Entity IDs become unique across time (unless you also randomize them)
+# - You can have more than 4 billion entities in the same world
+u64-entity-ids = []
+# Use random entity IDs instead of yielding them in order. Useful for debugging
+# entity-ID-dependent issues. Somewhat worse performance.
+randomize-entity-ids = ["rand"]
+# It would be nice to have this feature. It would let us prove, through
+# benchmarks, that there was a point to implementing EcHashMap.
+#std_echashmap = []
+# Instead of using the same constant prime for hashing Entity IDs, obtain one
+# dynamically at runtime. Can introduce some repeatability problems. Use this
+# iff you think you might be the victim of a hash attack, by somebody who can
+# control the entity IDs you use.
+dynamic-hash = ["rand", "primal"]
+
+[dev_dependencies]
+rand = "0.8.5"
+rand_xoshiro = "0.6.0"
