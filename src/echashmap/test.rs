@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     mem::ManuallyDrop,
     rc::Rc,
-    sync::RwLock,
+    sync::{Arc, RwLock},
 };
 
 use rand::{Rng, RngCore, SeedableRng};
@@ -260,12 +260,17 @@ fn drop_and_clone() {
 
 #[derive(Debug,Clone)]
 struct RealBig {
-    clone_tracker: Rc<EntityId>,
+    clone_tracker: Arc<EntityId>,
     bytes: [u8; 456],
 }
 
-fn compare_std_and_ec_maps(std_map: &HashMap<EntityId, RealBig>, ecs_map: &EcHashMap) {
+impl AsRef<RealBig> for RealBig {
+    fn as_ref(&self) -> &Self { self }
+}
+
+fn compare_std_and_ec_maps<T: AsRef<RealBig>>(std_map: &HashMap<EntityId, T>, ecs_map: &EcHashMap) {
     for (&key, std_value) in std_map.iter() {
+        let std_value = std_value.as_ref();
         assert_eq!(*std_value.clone_tracker, key);
         let ecs_value = ecs_map.get(key).expect("value in std_map missing from ecs_map");
         let ecs_value = unsafe { transmute::<*const u8, &RealBig>(ecs_value) };
@@ -290,6 +295,94 @@ fn compare_std_and_ec_maps(std_map: &HashMap<EntityId, RealBig>, ecs_map: &EcHas
             last_hash = Some(hash);
         }
     }
+}
+
+fn compare_std_maps<A: AsRef<RealBig>, B: AsRef<RealBig>>(map_a: &HashMap<EntityId, A>, map_b: &HashMap<EntityId, B>) {
+    for (&key, a_value) in map_a.iter() {
+        let a_value = a_value.as_ref();
+        assert_eq!(*a_value.clone_tracker, key);
+        let b_value = map_b.get(&key).expect("value in map_a missing from map_b");
+        let b_value = b_value.as_ref();
+        assert_eq!(&*a_value.clone_tracker as *const EntityId,
+            &*b_value.clone_tracker as *const EntityId);
+        assert_eq!(a_value.bytes, b_value.bytes);
+    }
+    for (&key, b_value) in map_b.iter() {
+        let b_value = b_value.as_ref();
+        assert_eq!(*b_value.clone_tracker, key);
+        let a_value = map_a.get(&key).expect("value in map_b missing from map_a");
+        let a_value = a_value.as_ref();
+        assert_eq!(&*b_value.clone_tracker as *const EntityId,
+            &*a_value.clone_tracker as *const EntityId);
+        assert_eq!(b_value.bytes, a_value.bytes);
+    }
+}
+
+fn accumulate_entries_from_split_iter(iter: EcHashMapIter<&EcHashMap>) -> HashMap<EntityId, &RealBig> {
+    use std::collections::hash_map::Entry as HashMapEntry;
+    let mut new_map = HashMap::new();
+    for (key, value) in iter {
+        match new_map.entry(key) {
+            HashMapEntry::Occupied(_) => panic!("DUPE WITHIN SPLIT!"),
+            HashMapEntry::Vacant(x) => { x.insert(unsafe { transmute::<*const u8, &RealBig>(value) }); }
+        }
+    }
+    new_map
+}
+
+fn merge_maps<V>(mut a: HashMap<EntityId, V>, b: HashMap<EntityId, V>) -> HashMap<EntityId, V> {
+    use std::collections::hash_map::Entry as HashMapEntry;
+    for (key, value) in b.into_iter() {
+        match a.entry(key) {
+            HashMapEntry::Occupied(_) => panic!("DUPE ACROSS SPLIT!"),
+            HashMapEntry::Vacant(x) => { x.insert(value); }
+        }
+    }
+    a
+}
+
+fn compare_std_and_ec_maps_split1(std_map: &HashMap<EntityId, RealBig>, ecs_map: &EcHashMap) {
+    let iter = EcHashMap::iter(ecs_map);
+    let (left_iter, right_iter) = iter.split();
+    let (left_map, right_map) = rayon::join(
+        || {accumulate_entries_from_split_iter(left_iter)},
+        || {accumulate_entries_from_split_iter(right_iter)},
+    );
+    let true_map = merge_maps(left_map, right_map);
+    compare_std_maps(std_map, &true_map);
+}
+
+fn compare_std_and_ec_maps_split2(std_map: &HashMap<EntityId, RealBig>, ecs_map: &EcHashMap) {
+    let iter = EcHashMap::iter(ecs_map);
+    let (left_iter, right_iter) = iter.split();
+    let (ll_iter, lr_iter) = left_iter.split();
+    let (rl_iter, rr_iter) = right_iter.split();
+    let (left_map, right_map) = rayon::join(
+        || {
+            let (left_map, right_map) = rayon::join(
+                || {
+                    accumulate_entries_from_split_iter(ll_iter)
+                },
+                || {
+                    accumulate_entries_from_split_iter(lr_iter)
+                }
+            );
+            merge_maps(left_map, right_map)
+        },
+        || {
+            let (left_map, right_map) = rayon::join(
+                || {
+                    accumulate_entries_from_split_iter(rl_iter)
+                },
+                || {
+                    accumulate_entries_from_split_iter(rr_iter)
+                }
+            );
+            merge_maps(left_map, right_map)
+        },
+    );
+    let true_map = merge_maps(left_map, right_map);
+    compare_std_maps(std_map, &true_map);
 }
 
 #[test]
@@ -320,11 +413,11 @@ fn real_big_test_body() {
         };
         let mut bytes = [0u8; 456];
         rng.fill_bytes(&mut bytes[..]);
-        let value = RealBig { clone_tracker: Rc::new(entity_id), bytes };
+        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes };
         assert!(ecs_map.get_or_insert_with(entity_id, |dst| {
             unsafe { transmute::<*mut u8, *mut RealBig>(dst).write(value.clone()) }
         }).1);
-        assert_eq!(Rc::strong_count(&value.clone_tracker), 2);
+        assert_eq!(Arc::strong_count(&value.clone_tracker), 2);
         std_map.insert(entity_id, value);
         assert!(ecs_map.len() == n + 1);
         assert!(std_map.len() == n + 1);
@@ -343,11 +436,11 @@ fn real_big_test_body() {
     compare_std_and_ec_maps(&std_map_clone, &ecs_map_clone);
     // mutate them further
     for (&key, value) in std_map.iter() {
-        assert_eq!(Rc::strong_count(&value.clone_tracker), 4);
+        assert_eq!(Arc::strong_count(&value.clone_tracker), 4);
         if rng.gen_bool(0.5) {
             assert!(std_map_clone.remove(&key).is_some());
             assert!(ecs_map_clone.remove(key));
-            assert_eq!(Rc::strong_count(&value.clone_tracker), 2);
+            assert_eq!(Arc::strong_count(&value.clone_tracker), 2);
         }
     }
     compare_std_and_ec_maps(&std_map, &ecs_map);
@@ -356,7 +449,7 @@ fn real_big_test_body() {
     drop(ecs_map_clone);
     compare_std_and_ec_maps(&std_map, &ecs_map);
     for (_, value) in std_map.iter() {
-        assert_eq!(Rc::strong_count(&value.clone_tracker), 2);
+        assert_eq!(Arc::strong_count(&value.clone_tracker), 2);
     }
 }
 
@@ -386,18 +479,18 @@ fn supernova_test() {
         };
         let mut bytes = [0u8; 456];
         rng.fill_bytes(&mut bytes[..]);
-        let value = RealBig { clone_tracker: Rc::new(entity_id), bytes };
+        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes };
         assert!(ecs_map.get_or_insert_with(entity_id, |dst| {
             unsafe { transmute::<*mut u8, *mut RealBig>(dst).write(value.clone()) }
         }).1);
-        assert_eq!(Rc::strong_count(&value.clone_tracker), 2);
+        assert_eq!(Arc::strong_count(&value.clone_tracker), 2);
         std_map.insert(entity_id, value);
         assert!(ecs_map.len() == n + 1);
         assert!(std_map.len() == n + 1);
     }
     compare_std_and_ec_maps(&std_map, &ecs_map);
     for (_, value) in std_map.iter() {
-        assert_eq!(Rc::strong_count(&value.clone_tracker), 2);
+        assert_eq!(Arc::strong_count(&value.clone_tracker), 2);
     }
     // now drop it into a neutron star
     while ecs_map.capacity() > 1 {
@@ -442,6 +535,66 @@ fn zst_supernova_test() {
         for (_, _) in EcHashMap::iter(&ecs_map) {}
         for (_, _) in EcHashMap::iter_mut(&mut ecs_map) {}
     }
+}
+
+#[test]
+fn rayon_test() {
+    #[cfg(feature="dynamic-hash")]
+    let _guard = dynamic_hash_guard();
+    const TEST_ENTITY_COUNT: usize = 16384;
+    const TEST_SEED: u64 = 0x4E95;
+    let mut rng = Xoshiro128StarStar::seed_from_u64(TEST_SEED);
+    let mut ecs_map = EcHashMap::with_capacity(Layout::new::<RealBig>(), Some(|x| {
+        unsafe { ManuallyDrop::drop(transmute::<*mut u8, &mut ManuallyDrop<RealBig>>(x)) }
+    }), |dst, src| {
+        unsafe {
+            transmute::<*mut u8, *mut RealBig>(dst).write(transmute::<*const u8, &RealBig>(src).clone())
+        }
+    }, 0);
+    eprintln!("{:?}", ecs_map);
+    let mut std_map = HashMap::new();
+    for n in 0 .. TEST_ENTITY_COUNT {
+        let entity_id = loop {
+            let candidate = rng.gen::<EntityId>();
+            if std_map.contains_key(&candidate) { continue }
+            else { break candidate }
+        };
+        let mut bytes = [0u8; 456];
+        rng.fill_bytes(&mut bytes[..]);
+        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes };
+        assert!(ecs_map.get_or_insert_with(entity_id, |dst| {
+            unsafe { transmute::<*mut u8, *mut RealBig>(dst).write(value.clone()) }
+        }).1);
+        assert_eq!(Arc::strong_count(&value.clone_tracker), 2);
+        std_map.insert(entity_id, value);
+        assert!(ecs_map.len() == n + 1);
+        assert!(std_map.len() == n + 1);
+    }
+    compare_std_and_ec_maps(&std_map, &ecs_map);
+    compare_std_and_ec_maps_split1(&std_map, &ecs_map);
+    compare_std_and_ec_maps_split2(&std_map, &ecs_map);
+    // make mutant clones
+    let mut std_map_clone = std_map.clone();
+    let mut ecs_map_clone = ecs_map.clone();
+    let mut mutiter = EcHashMap::iter_mut(&mut ecs_map_clone);
+    let (left_iter, right_iter) = mutiter.split();
+    rayon::join(|| {
+            for (_, ecs_value) in left_iter {
+                let ecs_value = unsafe { transmute::<*mut u8, &mut RealBig>(ecs_value) };
+                ecs_value.bytes[420] ^= 69;
+            }
+        }, || {
+            for (_, ecs_value) in right_iter {
+                let ecs_value = unsafe { transmute::<*mut u8, &mut RealBig>(ecs_value) };
+                ecs_value.bytes[420] ^= 69;
+            }
+    });
+    for (_, std_value) in std_map_clone.iter_mut() {
+        std_value.bytes[420] ^= 69;
+    }
+    compare_std_and_ec_maps(&std_map, &ecs_map);
+    compare_std_and_ec_maps(&std_map_clone, &ecs_map_clone);
+    // good enough for me
 }
 
 #[cfg(feature="dynamic-hash")]

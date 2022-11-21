@@ -17,6 +17,7 @@ use parking_lot::{
 pub type EntityId = u64;
 #[cfg(not(feature="u64-entity-ids"))]
 pub type EntityId = u32;
+type EntityCount = EntityId;
 
 mod echashmap;
 use echashmap::EcHashMap;
@@ -253,7 +254,8 @@ impl EcsWorld {
             panic!("Cannot perform unbuffered_tick() on an EcsWorld that is \
                 currently being ticked.")
         }
-        // if `is_ticking` is false, `origin` should be `None`
+        // if `is_ticking` is false, `origin` should be `None`, there should be
+        // no way to use `with_origin` to screw with that
         debug_assert!(self.origin.is_none());
         self.is_ticking = true;
         handler(self);
@@ -266,6 +268,18 @@ impl EcsWorld {
             debug_assert!(!component.is_locked());
             component.get_mut().contract();
         }
+    }
+    /// Runs a closure that can do `prev` iteration and getting, treating the
+    /// given world as the origin. Useful for render code.
+    pub fn with_origin<F: FnOnce(&EcsWorld)>(&mut self, origin: Arcow<EcsWorld>, f: F) {
+        if self.is_ticking {
+            panic!("Cannot perform with_origin() on an Ecsworld that is \
+                currently being ticked.")
+        }
+        let mut origin = Some(origin);
+        std::mem::swap(&mut self.origin, &mut origin);
+        f(self);
+        std::mem::swap(&mut self.origin, &mut origin);
     }
     fn post_tick(&mut self) {
         #[cfg(feature="randomize-entity-ids")]

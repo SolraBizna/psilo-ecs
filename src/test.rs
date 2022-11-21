@@ -128,6 +128,26 @@ struct TestCompB {
     });
 }
 
+#[cfg(debug_assertions)] #[test] fn yes_origin_prev() {
+    let mut world = Arcow::new(EcsWorld::with_blank_schema());
+    ecs_spawn!(world, TestCompA(456));
+    let old_world = world.clone();
+    world.with_origin(old_world, |world| {
+        for _ in ecs_iter!(world, prev TestCompA) {
+        }
+    });
+}
+
+#[cfg(debug_assertions)] #[test] #[should_panic] fn no_origin_mut() {
+    let mut world = Arcow::new(EcsWorld::with_blank_schema());
+    ecs_spawn!(world, TestCompA(456));
+    let old_world = world.clone();
+    world.with_origin(old_world, |world| {
+        for _ in ecs_iter!(world, mut TestCompA) {
+        }
+    });
+}
+
 #[cfg(debug_assertions)] #[test] #[should_panic] fn no_tick_no_delete() {
     let mut world = EcsWorld::with_blank_schema();
     let eid = ecs_spawn!(world, TestCompA(456));

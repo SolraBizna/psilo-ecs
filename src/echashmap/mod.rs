@@ -78,12 +78,14 @@ pub struct EcHashMapIter<T: Deref<Target=EcHashMap>> {
     map: T,
     next_bucket: EntityCount,
     next_entry: Size,
+    limit_bucket: EntityCount,
 }
 
 pub struct EcHashMapIterMut<T: Deref<Target=EcHashMap>> {
     map: T,
     next_bucket: EntityCount,
     next_entry: Size,
+    limit_bucket: EntityCount,
 }
 
 /* Direct buckets are as if:
@@ -878,6 +880,7 @@ impl EcHashMap {
     /// through a lock guard.
     pub fn iter<T: Deref<Target=EcHashMap>>(target: T) -> EcHashMapIter<T> {
         EcHashMapIter {
+            limit_bucket: target.capacity,
             map: target,
             next_bucket: 0,
             next_entry: 0,
@@ -893,6 +896,7 @@ impl EcHashMap {
     /// through a lock guard.
     pub fn iter_mut<T: DerefMut<Target=EcHashMap>>(target: T) -> EcHashMapIterMut<T> {
         EcHashMapIterMut {
+            limit_bucket: target.capacity,
             map: target,
             next_bucket: 0,
             next_entry: 0,
@@ -968,9 +972,8 @@ impl Drop for EcHashMap {
 
 impl<T: Deref<Target=EcHashMap>> Iterator for EcHashMapIter<T> {
     type Item = (EntityId, *const u8);
-
     fn next(&mut self) -> Option<Self::Item> {
-        while self.next_bucket < self.map.capacity {
+        while self.next_bucket < self.limit_bucket {
             let bucket = unsafe { self.map.get_bucket(self.next_bucket) };
             if self.next_entry >= bucket.len() {
                 self.next_bucket += 1;
@@ -988,11 +991,36 @@ impl<T: Deref<Target=EcHashMap>> Iterator for EcHashMapIter<T> {
     }
 }
 
+impl<T: Deref<Target=EcHashMap>> EcHashMapIter<T> {
+    /// Splits this iterator into two iterators, each of which will iterate
+    /// over a different half of the remaining buckets.
+    pub fn split<'a>(&'a self) -> (EcHashMapIter<&'a EcHashMap>, EcHashMapIter<&'a EcHashMap>) {
+        let r = self.map.deref();
+        let split_bucket = (self.limit_bucket - self.next_bucket) / 2 + self.next_bucket;
+        (EcHashMapIter {
+            map: r,
+            next_bucket: self.next_bucket,
+            next_entry: self.next_entry,
+            limit_bucket: split_bucket,
+        },
+        EcHashMapIter {
+            map: r,
+            next_bucket: split_bucket,
+            next_entry: 0,
+            limit_bucket: self.limit_bucket,
+        })
+    }
+    /// Returns the number of *buckets* covered by this iterator, not counting
+    /// buckets it has already finished yielding from.
+    pub fn rank(&self) -> EntityCount { self.limit_bucket - self.next_bucket }
+}
+
+unsafe impl<T: Deref<Target=EcHashMap>> Send for EcHashMapIter<T> {}
+
 impl<T: Deref<Target=EcHashMap>> Iterator for EcHashMapIterMut<T> {
     type Item = (EntityId, *mut u8);
-
     fn next(&mut self) -> Option<Self::Item> {
-        while self.next_bucket < self.map.capacity {
+        while self.next_bucket < self.limit_bucket {
             let bucket = unsafe { self.map.get_bucket(self.next_bucket) };
             if self.next_entry >= bucket.len() {
                 self.next_bucket += 1;
@@ -1012,3 +1040,32 @@ impl<T: Deref<Target=EcHashMap>> Iterator for EcHashMapIterMut<T> {
     }
 }
 
+impl<T: DerefMut<Target=EcHashMap>> EcHashMapIterMut<T> {
+    /// Splits this iterator into two iterators, each of which will iterate
+    /// over a different half of the remaining buckets.
+    pub fn split<'a>(&'a mut self) -> (EcHashMapIterMut<&'a mut EcHashMap>, EcHashMapIterMut<&'a mut EcHashMap>) {
+        let r = self.map.deref_mut();
+        let split_bucket = (self.limit_bucket - self.next_bucket) / 2 + self.next_bucket;
+        // These two references are used as slices into different subsets of
+        // the EcHashMap. The values they touch don't overlap, and they never
+        // mutate common fields. I *hope* this is enough to avoid breaking the
+        // aliasing rules.
+        (EcHashMapIterMut {
+            map: unsafe { (r as *mut EcHashMap).as_mut().unwrap() },
+            next_bucket: self.next_bucket,
+            next_entry: self.next_entry,
+            limit_bucket: split_bucket,
+        },
+        EcHashMapIterMut {
+            map: r,
+            next_bucket: split_bucket,
+            next_entry: 0,
+            limit_bucket: self.limit_bucket,
+        })
+    }
+    /// Returns the number of *buckets* covered by this iterator, not counting
+    /// buckets it has already finished yielding from.
+    pub fn rank(&self) -> EntityCount { self.limit_bucket - self.next_bucket }
+}
+
+unsafe impl<T: DerefMut<Target=EcHashMap>> Send for EcHashMapIterMut<T> {}

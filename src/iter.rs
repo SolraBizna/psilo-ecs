@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     Component,
-    EntityId,
+    EntityCount, EntityId,
     echashmap::{EcHashMap, EcHashMapIter, EcHashMapIterMut, hash},
     RwLockReadGuard, RwLockWriteGuard,
     MappedRwLockReadGuard, MappedRwLockWriteGuard,
@@ -29,6 +29,7 @@ pub enum ComponentAccess {
 
 pub enum ComponentIterator<'a> {
     Shared(EcHashMapIter<&'a EcHashMap>),
+    Exclusive(EcHashMapIterMut<&'a mut EcHashMap>),
     SharedGd(EcHashMapIter<RwLockReadGuard<'a, EcHashMap>>),
     ExclusiveGd(EcHashMapIterMut<RwLockWriteGuard<'a, EcHashMap>>),
     Empty
@@ -47,6 +48,25 @@ pub enum ComponentGotten<'a> {
     Shared(*const u8),
     SharedGd(MappedRwLockReadGuard<'a, u8>),
     ExclusiveGd(MappedRwLockWriteGuard<'a, u8>),
+}
+
+impl<'a, const N: usize> ComponentBulkIterator<'a, N> {
+    /// Splits this iterator into two iterators, each of which will iterate
+    /// over a different half of the remaining buckets.
+    pub fn split<'b>(&'b mut self) -> (ComponentBulkIterator<'b, N>, ComponentBulkIterator<'b, N>) {
+        let mut iters = self.iterators.each_mut().map(|x| x.split());
+        let left = iters.each_mut().map(|x| ComponentIterator::take(&mut x.0));
+        let right = iters.each_mut().map(|x| ComponentIterator::take(&mut x.1));
+        (ComponentBulkIterator { iterators: left },
+            ComponentBulkIterator { iterators: right })
+    }
+    /// Returns the number of *buckets* covered by this iterator, not counting
+    /// buckets it has already passed over.
+    /// 
+    /// This is the MINIMUM rank of any of the iterated-upon components.
+    pub fn rank(&self) -> EntityCount {
+        self.iterators.iter().fold(EntityCount::MAX, |a, x| a.min(x.rank()))
+    }
 }
 
 impl<'a, const N: usize> Iterator for ComponentBulkIterator<'a, N> {
@@ -79,11 +99,50 @@ impl<'a, const N: usize> Iterator for ComponentBulkIterator<'a, N> {
     }
 }
 
+impl<'a> ComponentIterator<'a> {
+    fn take(&mut self) -> ComponentIterator<'a> {
+        let mut ret = ComponentIterator::Empty;
+        std::mem::swap(self, &mut ret);
+        ret
+    }
+    fn split<'b>(&'b mut self) -> (ComponentIterator<'b>, ComponentIterator<'b>) {
+        match self {
+            ComponentIterator::Shared(x) => {
+                let (left_iter, right_iter) = x.split();
+                (ComponentIterator::Shared(left_iter), ComponentIterator::Shared(right_iter))   
+            },
+            ComponentIterator::Exclusive(x) => {
+                let (left_iter, right_iter) = x.split();
+                (ComponentIterator::Exclusive(left_iter), ComponentIterator::Exclusive(right_iter))   
+            },
+            ComponentIterator::SharedGd(x) => {
+                let (left_iter, right_iter) = x.split();
+                (ComponentIterator::Shared(left_iter), ComponentIterator::Shared(right_iter))   
+            },
+            ComponentIterator::ExclusiveGd(x) => {
+                let (left_iter, right_iter) = x.split();
+                (ComponentIterator::Exclusive(left_iter), ComponentIterator::Exclusive(right_iter))   
+            },
+            ComponentIterator::Empty => (ComponentIterator::Empty, ComponentIterator::Empty),
+        }
+    }
+    fn rank(&self) -> EntityCount {
+        match self {
+            ComponentIterator::Shared(x) => x.rank(),
+            ComponentIterator::Exclusive(x) => x.rank(),
+            ComponentIterator::SharedGd(x) => x.rank(),
+            ComponentIterator::ExclusiveGd(x) => x.rank(),
+            ComponentIterator::Empty => 0,
+        }
+    }
+}
+
 impl<'a> Iterator for ComponentIterator<'a> {
     type Item = ComponentIterated<'a>;
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             ComponentIterator::Shared(x) => x.next().map(|(a,b)| ComponentIterated::Shared(a,b,PhantomData)),
+            ComponentIterator::Exclusive(x) => x.next().map(|(a,b)| ComponentIterated::Exclusive(a,b,PhantomData)),
             ComponentIterator::SharedGd(x) => x.next().map(|(a,b)| ComponentIterated::Shared(a,b,PhantomData)),
             ComponentIterator::ExclusiveGd(x) => x.next().map(|(a,b)| ComponentIterated::Exclusive(a,b,PhantomData)),
             ComponentIterator::Empty => None,
@@ -160,7 +219,7 @@ impl crate::EcsWorld {
                 ComponentAccess::Prev(what) => {
                     let origin = match self.origin.as_ref() {
                         Some(x) => x,
-                        None => panic!("Attempted to perform `prev` iteration outside of a buffered tick.\nYou may only perform `prev` iteration inside a call to `Arcow<EcsWorld>::buffered_tick` or `EcsWorld::with_origin`.")
+                        None => panic!("Attempted to perform `prev` iteration outside of a buffered tick and without an explicit origin.\nYou may only perform `prev` iteration inside a call to `Arcow<EcsWorld>::buffered_tick` or `EcsWorld::with_origin`.")
                     };
                     // If we have an origin, we have an immutable reference to
                     // it. If we have an immutable reference to it, it cannot
@@ -219,7 +278,7 @@ impl crate::EcsWorld {
                 ComponentAccess::Prev(what) => {
                     let origin = match self.origin.as_ref() {
                         Some(x) => x,
-                        None => panic!("Attempted to get a `prev` component outside of a buffered tick.\nYou may only get `prev` components inside a call to `Arcow<EcsWorld>::buffered_tick` or `EcsWorld::with_origin`.")
+                        None => panic!("Attempted to get a `prev` component outside of a buffered tick and without an explicit origin.\nYou may only get `prev` components inside a call to `Arcow<EcsWorld>::buffered_tick` or `EcsWorld::with_origin`.")
                     };
                     // See iterate_on for justification of unsafe lock bypass
                     // in the origin case.
