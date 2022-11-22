@@ -43,17 +43,20 @@ struct TestCompB {
 }
 
 #[test] #[should_panic] fn no_tick_i() {
-    let world = EcsWorld::with_blank_schema();
+    let mut world = EcsWorld::with_blank_schema();
+    ecs_spawn!(world, TestCompA(456));
     for _ in ecs_iter!(world, mut TestCompA) {}
 }
 
 #[test] #[should_panic] fn no_tick_origin() {
-    let world = EcsWorld::with_blank_schema();
+    let mut world = EcsWorld::with_blank_schema();
+    ecs_spawn!(world, TestCompA(456));
     for _ in ecs_iter!(world, prev TestCompA) {}
 }
 
 #[test] fn yes_tick_i() {
     let mut world = EcsWorld::with_blank_schema();
+    ecs_spawn!(world, TestCompA(456));
     world.unbuffered_tick(|world| {
         for _ in ecs_iter!(world, mut TestCompA) {}
     })
@@ -61,13 +64,15 @@ struct TestCompB {
 
 #[test] #[should_panic] fn no_yes_tick_origin() {
     let mut world = EcsWorld::with_blank_schema();
+    ecs_spawn!(world, TestCompA(456));
     world.unbuffered_tick(|world| {
         for _ in ecs_iter!(world, prev TestCompA) {}
     })
 }
 
 #[test] fn yes_tick_origin() {
-    let world = Arcow::new(EcsWorld::with_blank_schema());
+    let mut world = Arcow::new(EcsWorld::with_blank_schema());
+    ecs_spawn!(world, TestCompA(456));
     world.buffered_tick(|world| {
         for _ in ecs_iter!(world, prev TestCompA) {}
         for _ in ecs_iter!(world, mut TestCompA) {}

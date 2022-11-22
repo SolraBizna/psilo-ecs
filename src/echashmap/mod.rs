@@ -7,7 +7,7 @@ use std::{
     ops::{Deref, DerefMut, Range, RangeBounds, Bound},
 };
 
-use crate::EntityId;
+use crate::{EntityCount, EntityId};
 
 // The hash function(s) we use are a simple modular multiply by a prime. This
 // is injective; if A != B then H(A) != H(B). We discard low bits to create the
@@ -30,7 +30,6 @@ type Size = usize;
 #[cfg(not(feature="use-usize"))]
 type Size = u32;
 
-type EntityCount = EntityId;
 type EntityHash = EntityId;
 
 /// We try to determine how many values to directly embed based on some
@@ -503,7 +502,7 @@ impl BucketPointer {
                         let eid = *transmute::<&u8, &EntityId>(&pair[0]);
                         ids_slice[n as usize] = eid;
                         things_slice[(n * ehm.value_stride) as usize
-                            .. (n * ehm.value_stride + ehm.value_stride) as usize].copy_from_slice(&pair[ehm.indirect_bucket_value_offset as usize ..]);
+                            .. (n * ehm.value_stride + ehm.value_layout_size) as usize].copy_from_slice(&pair[ehm.indirect_bucket_value_offset as usize .. (ehm.indirect_bucket_value_offset + ehm.value_layout_size) as usize ]);
                     }
                     indirect.dealloc(ehm);
                 }

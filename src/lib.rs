@@ -334,7 +334,7 @@ impl EcsWorld {
 }
 
 pub trait EcsWorldBufferedTick {
-    fn buffered_tick<F: FnOnce(&mut EcsWorld)>(&self, handler: F) -> Arcow<EcsWorld>;
+    fn buffered_tick<'b, F: FnOnce(&mut EcsWorld)>(&'b self, handler: F) -> Arcow<EcsWorld>;
 }
 
 impl EcsWorldBufferedTick for Arcow<EcsWorld> {
@@ -345,7 +345,7 @@ impl EcsWorldBufferedTick for Arcow<EcsWorld> {
     /// During a double-buffered tick, all forms of component iteration are
     /// possible, including `prev`. If you don't use `prev` iteration anywhere,
     /// you may get better performance from using `unbuffered_tick` instead.
-    fn buffered_tick<F: FnOnce(&mut EcsWorld)>(&self, handler: F) -> Arcow<EcsWorld> {
+    fn buffered_tick<'a, 'b, F: FnOnce(&mut EcsWorld)>(&'b self, handler: F) -> Arcow<EcsWorld> {
         if self.is_ticking {
             panic!("Cannot perform buffered_tick() on an EcsWorld that is \
                 currently being ticked.")

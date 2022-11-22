@@ -11,15 +11,15 @@ use std::{
 use rand::{Rng, RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro128StarStar;
 
-type Uke = (i32, i64);
+type Uke = (i32, i64, i8);
 const TEST_UKES: [Uke; 7] = [
-    (173, 467321476),
-    (32789, 777643),
-    (732, 0),
-    (73117, 8887324767),
-    (897, 64376),
-    (314, 159265358),
-    (0x48656c6c, 0x6f2c206e656d6f21),
+    (173, 467321476, 52),
+    (32789, 777643, 60),
+    (732, 0, 70),
+    (73117, 8887324767, 71),
+    (897, 64376, 75),
+    (314, 159265358, 76),
+    (0x48656c6c, 0x6f2c206e656d6f21, 80),
 ];
 fn create_uke_map(capacity: usize) -> EcHashMap {
     EcHashMap::with_capacity(Layout::new::<Uke>(), None, clone_uke, capacity)
@@ -120,8 +120,8 @@ fn iter_mut() {
     let _guard = dynamic_hash_guard();
     let mut test_map = create_uke_map(16);
     eprintln!("{:?}", test_map);
-    insert_ukes(&mut test_map, TEST_UKES.iter().enumerate().map(|(i,(a,b))| (i, (*a, b - i as i64))));
-    check_ukes(&test_map, TEST_UKES.iter().enumerate().map(|(i,(a,b))| (i, (*a, b - i as i64))));
+    insert_ukes(&mut test_map, TEST_UKES.iter().enumerate().map(|(i,(a,b,c))| (i, (*a, b - i as i64, *c))));
+    check_ukes(&test_map, TEST_UKES.iter().enumerate().map(|(i,(a,b,c))| (i, (*a, b - i as i64, *c))));
     for (key, uke) in iter_mut_ukes(&mut test_map) {
         uke.1 += key as i64;
     }
@@ -152,6 +152,9 @@ fn crowded_remove() {
     let mut test_map = create_uke_map(4);
     eprintln!("{:?}", test_map);
     insert_ukes(&mut test_map, TEST_UKES.iter().enumerate());
+    while test_map.capacity > 4 {
+        test_map.contract_in_place();
+    }
     for i in 0 .. TEST_UKES.len() {
         test_map.remove(i as EntityId);
     }
@@ -165,6 +168,9 @@ fn too_crowded_remove() {
     let mut test_map = create_uke_map(2);
     eprintln!("{:?}", test_map);
     insert_ukes(&mut test_map, TEST_UKES.iter().enumerate());
+    while test_map.capacity > 2 {
+        test_map.contract_in_place();
+    }
     for i in 0 .. TEST_UKES.len() {
         test_map.remove(i as EntityId);
     }
@@ -258,10 +264,12 @@ fn drop_and_clone() {
     assert_eq!(rcs.each_ref().map(Rc::strong_count), [1, 1, 1]);
 }
 
+#[repr(C)]
 #[derive(Debug,Clone)]
 struct RealBig {
     clone_tracker: Arc<EntityId>,
     bytes: [u8; 456],
+    extra: u8, 
 }
 
 impl AsRef<RealBig> for RealBig {
@@ -413,7 +421,7 @@ fn real_big_test_body() {
         };
         let mut bytes = [0u8; 456];
         rng.fill_bytes(&mut bytes[..]);
-        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes };
+        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes, extra: 0x45 };
         assert!(ecs_map.get_or_insert_with(entity_id, |dst| {
             unsafe { transmute::<*mut u8, *mut RealBig>(dst).write(value.clone()) }
         }).1);
@@ -479,7 +487,7 @@ fn supernova_test() {
         };
         let mut bytes = [0u8; 456];
         rng.fill_bytes(&mut bytes[..]);
-        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes };
+        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes, extra: 0x45 };
         assert!(ecs_map.get_or_insert_with(entity_id, |dst| {
             unsafe { transmute::<*mut u8, *mut RealBig>(dst).write(value.clone()) }
         }).1);
@@ -528,6 +536,22 @@ fn zst_supernova_test() {
         ecs_map.contract_in_place();
         for (_, _) in EcHashMap::iter(&ecs_map) {}
         for (_, _) in EcHashMap::iter_mut(&mut ecs_map) {}
+        if ecs_map.capacity() == 512 {
+            let mut ecs_map_two = ecs_map.clone();
+            for (eid, _) in EcHashMap::iter(&ecs_map) {
+                if eid % 2 == 0 {
+                    ecs_map_two.remove(eid);
+                }
+            }
+            for (eid, _) in EcHashMap::iter(&ecs_map) {
+                if eid % 2 == 1 {
+                    ecs_map_two.remove(eid);
+                }
+            }
+            for (eid, _) in EcHashMap::iter(&ecs_map_two) {
+                println!("{}", eid);
+            }
+        }
     }
     // and let it go supernova
     while ecs_map.capacity() < ecs_map.len() * 16 {
@@ -561,7 +585,7 @@ fn rayon_test() {
         };
         let mut bytes = [0u8; 456];
         rng.fill_bytes(&mut bytes[..]);
-        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes };
+        let value = RealBig { clone_tracker: Arc::new(entity_id), bytes, extra: 0x45 };
         assert!(ecs_map.get_or_insert_with(entity_id, |dst| {
             unsafe { transmute::<*mut u8, *mut RealBig>(dst).write(value.clone()) }
         }).1);
