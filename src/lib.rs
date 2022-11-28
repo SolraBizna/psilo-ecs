@@ -18,6 +18,7 @@ pub type EntityId = u64;
 #[cfg(not(feature="u64-entity-ids"))]
 pub type EntityId = u32;
 type EntityCount = EntityId;
+type EntityHash = EntityId;
 
 mod echashmap;
 use echashmap::EcHashMap;
@@ -385,32 +386,23 @@ impl Clone for EcsWorld {
 /// the same type of component is attached more than once.
 #[macro_export]
 macro_rules! ecs_attach {
-    ($world:expr, $eid:expr, $comp:expr, $($comps:expr),+) => {
+    ($world:expr, $eid:expr, $comp:expr, $($comps:expr),+ $(,)?) => {
         $world.attach_new_component($eid, $comp);
         $crate::ecs_attach!($world, $eid, $($comps),+);
     };
-    ($world:expr, $eid:expr, $comp:expr, $($comps:expr),+,) => {
-        $crate::ecs_attach!($world, $eid, $comp, $($comps),+)
-    };
-    ($world:expr, $eid:expr, $comp:expr) => {
+    ($world:expr, $eid:expr, $comp:expr $(,)?) => {
         $world.attach_new_component($eid, $comp);
-    };
-    ($world:expr, $eid:expr, $comp:expr, ) => {
-        $crate::ecs_attach($world, $eid, $comp,+)
     };
 }
 
 /// Spawn a new entity. TODO document
 #[macro_export]
 macro_rules! ecs_spawn {
-    ($world:expr, $($comps:expr),+) => {{
+    ($world:expr, $($comps:expr),+ $(,)?) => {{
         let eid = $world.spawn();
         $crate::ecs_attach!($world, eid, $($comps),+);
         eid
     }};
-    ($world:expr, $($comps:expr),+,) => {
-        $crate::ecs_spawn!($world, $($comps),+)
-    };
 }
 
 /// Deletes all components of a given type from every given entity. It's
@@ -423,7 +415,7 @@ macro_rules! ecs_spawn {
 /// this during a mutable iteration over that same component type!
 #[macro_export]
 macro_rules! ecs_detach {
-    ($world:expr, $eids:expr, $($comps:ty),+) => {
+    ($world:expr, $eids:expr, $($comps:ty),+ $(,)?) => {
         $world.detach_components($eids, [$(std::any::TypeId::of::<$comps>()),+])
     };
 }

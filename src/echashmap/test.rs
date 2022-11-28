@@ -8,6 +8,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use crate::EntityHash;
+
 use rand::{Rng, RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro128StarStar;
 

@@ -1,4 +1,4 @@
-use super::{EntityId, EntityHash};
+use crate::{EntityId, EntityHash};
 
 // TODO: do some statistical checks on these
 

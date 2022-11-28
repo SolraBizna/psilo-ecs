@@ -7,7 +7,7 @@ use std::{
     ops::{Deref, DerefMut, Range, RangeBounds, Bound},
 };
 
-use crate::{EntityCount, EntityId};
+use crate::{EntityCount, EntityId, EntityHash};
 
 // The hash function(s) we use are a simple modular multiply by a prime. This
 // is injective; if A != B then H(A) != H(B). We discard low bits to create the
@@ -29,8 +29,6 @@ pub(crate) use constant_hash::hash;
 type Size = usize;
 #[cfg(not(feature="use-usize"))]
 type Size = u32;
-
-type EntityHash = EntityId;
 
 /// We try to determine how many values to directly embed based on some
 /// heuristics. This sets a minimum on how many values we will embed directly.
@@ -991,6 +989,10 @@ impl<T: Deref<Target=EcHashMap>> Iterator for EcHashMapIter<T> {
 }
 
 impl<T: Deref<Target=EcHashMap>> EcHashMapIter<T> {
+    pub fn rewind(&mut self) {
+        debug_assert!(self.next_entry > 0);
+        self.next_entry -= 1;
+    }
     /// Splits this iterator into two iterators, each of which will iterate
     /// over a different half of the remaining buckets.
     pub fn split<'a>(&'a self) -> (EcHashMapIter<&'a EcHashMap>, EcHashMapIter<&'a EcHashMap>) {
@@ -1040,6 +1042,10 @@ impl<T: Deref<Target=EcHashMap>> Iterator for EcHashMapIterMut<T> {
 }
 
 impl<T: DerefMut<Target=EcHashMap>> EcHashMapIterMut<T> {
+    pub fn rewind(&mut self) {
+        debug_assert!(self.next_entry > 0);
+        self.next_entry -= 1;
+    }
     /// Splits this iterator into two iterators, each of which will iterate
     /// over a different half of the remaining buckets.
     pub fn split<'a>(&'a mut self) -> (EcHashMapIterMut<&'a mut EcHashMap>, EcHashMapIterMut<&'a mut EcHashMap>) {

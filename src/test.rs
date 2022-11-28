@@ -24,6 +24,29 @@ struct TestCompB {
     assert_eq!(ecs_iter!(world, cur TestCompA, cur TestCompB).fold(0, |a,_| a+1), 1);
 }
 
+#[test] fn component_optional_iter() {
+    let mut world = EcsWorld::with_blank_schema();
+    let nu = ecs_spawn!(world, TestCompA(456));
+    let ou = ecs_spawn!(world, TestCompB { alpha: 0, beta: 123 });
+    let pu = ecs_spawn!(world, TestCompA(101112), TestCompB { alpha: 65535, beta: 789 });
+    println!("{} {} {}", nu, ou, pu);
+    for (eid, a, b) in ecs_iter!(world, cur TestCompA, cur_optional TestCompB) {
+        println!("Option option option! {}, {:?}, {:?}", eid, a, b);
+    }
+    assert_eq!(ecs_iter!(world, cur TestCompA, cur_optional TestCompB).fold(0, |a,_| a+1), 2);
+}
+
+#[test] #[should_panic] fn component_no_leading_optional() {
+    let mut world = EcsWorld::with_blank_schema();
+    let nu = ecs_spawn!(world, TestCompA(456));
+    let ou = ecs_spawn!(world, TestCompB { alpha: 0, beta: 123 });
+    let pu = ecs_spawn!(world, TestCompA(101112), TestCompB { alpha: 65535, beta: 789 });
+    println!("{} {} {}", nu, ou, pu);
+    for (eid, a, b) in ecs_iter!(world, cur_optional TestCompA, cur_optional TestCompB) {
+        println!("Option option option! {}, {:?}, {:?}", eid, a, b);
+    }
+}
+
 #[test] fn zst() {
     let mut world = EcsWorld::with_blank_schema();
     println!("{}", ecs_spawn!(world, ()));
@@ -208,4 +231,55 @@ struct TestCompB {
         assert!(ecs_get!(world, target, cur TestCompB).is_none());
         assert!(ecs_get!(world, target, cur TestCompA).is_some());
     });
+}
+
+#[test] fn optional_no_miss() {
+    let mut world = EcsWorld::with_blank_schema();
+    for n in 0 .. 1024 {
+        let blah = ecs_spawn!(world, TestCompA(456));
+        if n % 16 == 7 {
+            ecs_attach!(world, blah, TestCompB { alpha: 49151, beta: 1 });
+        }
+    }
+    world.unbuffered_tick(|world| {
+        for (_, a, b) in ecs_iter!(world, mut TestCompA, mut_optional TestCompB) {
+            if let Some(b) = b {
+                a.0 -= 456;
+                b.alpha = 3; // pi
+            }
+            else {
+                a.0 -= 123;
+            }
+        }
+    });
+    let mut wrong = 0;
+    for (eid, a) in ecs_iter!(world, cur TestCompA) {
+        match ecs_get!(world, eid, cur TestCompB) {
+            None => {
+                if a.0 == 333 {
+                    // OK
+                }
+                else {
+                    eprintln!("{}のa should be 333, is {}", eid, a.0);
+                    wrong += 1;
+                }
+            },
+            Some(b) => {
+                if a.0 == 0 {
+                    // OK
+                }
+                else {
+                    eprintln!("{}のa should be 0, is {}", eid, a.0);
+                    wrong += 1;
+                }
+                if b.alpha != 3 {
+                    eprintln!("{}のb.alpha should be 3, is {}", eid, b.alpha);
+                    wrong += 1;
+                }
+            },
+        }
+    }
+    if wrong > 0 {
+        panic!("{} wrongs!", wrong);
+    }
 }
