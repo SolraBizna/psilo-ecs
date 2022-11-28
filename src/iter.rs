@@ -60,6 +60,7 @@ pub enum ComponentIterated<'a> {
 }
 
 pub enum ComponentGotten<'a> {
+    Missing,
     Shared(*const u8),
     SharedGd(MappedRwLockReadGuard<'a, u8>),
     ExclusiveGd(MappedRwLockWriteGuard<'a, u8>),
@@ -311,6 +312,33 @@ impl<'a> ComponentGotten<'a> {
             _ => unreachable_unchecked(),
         }
     }
+    #[doc(hidden)]
+    /// Unsafe unless used exactly correctly! Please use `ecs_iter!` instead!
+    pub unsafe fn unsafe_optional_shared<T: Component>(self) -> Option<&'a T> {
+        match self {
+            ComponentGotten::Missing => None,
+            ComponentGotten::Shared(x) => Some(std::mem::transmute::<*const u8, &T>(x)),
+            _ => unreachable_unchecked(),
+        }
+    }
+    #[doc(hidden)]
+    /// Unsafe unless used exactly correctly! Please use `ecs_iter!` instead!
+    pub unsafe fn unsafe_optional_shared_gd<T: Component>(self) -> Option<MappedRwLockReadGuard<'a, T>> {
+        match self {
+            ComponentGotten::Missing => None,
+            ComponentGotten::SharedGd(x) => Some(MappedRwLockReadGuard::map(x, |x| unsafe { std::mem::transmute::<*const u8, &T>(x) })),
+            _ => unreachable_unchecked(),
+        }
+    }
+    #[doc(hidden)]
+    /// Unsafe unless used exactly correctly! Please use `ecs_iter!` instead!
+    pub unsafe fn unsafe_optional_exclusive_gd<T: Component>(self) -> Option<MappedRwLockWriteGuard<'a, T>> {
+        match self {
+            ComponentGotten::Missing => None,
+            ComponentGotten::ExclusiveGd(x) => Some(MappedRwLockWriteGuard::map(x, |x| unsafe { std::mem::transmute::<*mut u8, &mut T>(x) })),
+            _ => unreachable_unchecked(),
+        }
+    }
 }
 
 impl crate::EcsWorld {
@@ -381,10 +409,9 @@ impl crate::EcsWorld {
     /// Don't call this directly! Use [ecs_get!](macro.ecs_get.html) instead.
     #[doc(hidden)]
     pub fn get_entity<'a, const N: usize>(&'a self, eid: EntityId, tuple: [ComponentAccess; N]) -> Option<[ComponentGotten; N]> {
-        let iterated = tuple.map(|access| {
+        let iterated = tuple.each_ref().map(|access| {
             match access {
-                ComponentAccess::Prev(what, optional) => {
-                    if optional { todo!("optional") }
+                ComponentAccess::Prev(what, _optional) => {
                     let origin = match self.origin.as_ref() {
                         Some(x) => x,
                         None => panic!("Attempted to get a `prev` component outside of a buffered tick and without an explicit origin.\nYou may only get `prev` components inside a call to `Arcow<EcsWorld>::buffered_tick` or `EcsWorld::with_origin`.")
@@ -406,8 +433,7 @@ impl crate::EcsWorld {
                         ComponentGotten::Shared(component)
                     })
                 },
-                ComponentAccess::Cur(what, optional) => {
-                    if optional { todo!("optional") }
+                ComponentAccess::Cur(what, _optional) => {
                     let lock = match self.components.get(&what) {
                         Some(x) => x,
                         None => return None,
@@ -422,8 +448,7 @@ impl crate::EcsWorld {
                         ComponentGotten::SharedGd(RwLockReadGuard::map(guard, |_| unsafe { component.as_ref().unwrap() }))
                     })
                 },
-                ComponentAccess::Mut(what, optional) => {
-                    if optional { todo!("optional") }
+                ComponentAccess::Mut(what, _optional) => {
                     if !self.is_ticking {
                         panic!("Attempted to get a `mut` component outside of a tick.\nYou may only mutate components inside a call to `EcsWorld::unbuffered_tick` or `Arcow<EcsWorld>::buffered_tick`.")
                     }
@@ -442,10 +467,12 @@ impl crate::EcsWorld {
                 },
             }
         });
-        if iterated.iter().any(|x| x.is_none()) { None }
-        else {
-            Some(iterated.map(|x| x.unwrap()))
+        for (accessor, gotten) in tuple.iter().zip(iterated.each_ref()) {
+            if gotten.is_none() && !accessor.is_optional() {
+                return None
+            }
         }
+        Some(iterated.map(|x| x.unwrap_or(ComponentGotten::Missing)))
     }
 }
 

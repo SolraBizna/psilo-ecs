@@ -252,6 +252,10 @@ struct TestCompB {
             }
         }
     });
+    for (eid, _a, b) in ecs_iter!(world, cur TestCompA, cur_optional TestCompB) {
+        let (_alt_a, alt_b) = ecs_get!(world, eid, cur TestCompA, cur_optional TestCompB).unwrap();
+        assert_eq!(b.is_none(), alt_b.is_none());
+    }
     let mut wrong = 0;
     for (eid, a) in ecs_iter!(world, cur TestCompA) {
         match ecs_get!(world, eid, cur TestCompB) {
