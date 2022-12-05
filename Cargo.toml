@@ -10,6 +10,7 @@ log = "0.4"
 parking_lot = "0.12"
 primal = {version = "0.2", optional = true}
 rand = {version = "0.8.5", optional = true}
+psilo-ecs-procmacros = {path = "psilo-ecs-procmacros"}
 
 [features]
 default = []

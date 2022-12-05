@@ -24,7 +24,6 @@ mod echashmap;
 use echashmap::EcHashMap;
 #[cfg(test)]
 mod test;
-mod unfolded_macros;
 
 pub mod iter;
 
@@ -419,3 +418,83 @@ macro_rules! ecs_detach {
         $world.detach_components($eids, [$(std::any::TypeId::of::<$comps>()),+])
     };
 }
+
+/// Iterates through all entities in a world that have a given set of
+/// components. This is the fundamental operation of a System.
+/// 
+/// ```rust ignore
+/// # // This test doesn't compile at the moment. Bug in `proc-macro-crate`
+/// # // considered responsible.
+/// # use psilo_ecs::{ecs_iter, EcsWorld};
+/// # #[derive(Clone)] struct FooComp {}
+/// # #[derive(Clone)] struct BarComp {}
+/// # let world = EcsWorld::with_blank_schema();
+/// for (eid, foo, bar) in ecs_iter!(world, mut FooComp, cur BarComp) {
+///     // do something with eid, foo, bar
+/// }
+/// ```
+/// 
+/// You can iterate over any number of component types greater than one. (If
+/// you have more than a dozen, you should consider breaking up this System
+/// into smaller, simpler ones.)
+/// 
+/// Each component to iterate over is an access type and a component type.
+/// 
+/// Access types:
+/// 
+/// - `prev`: Obtain the state at the **end** of the previous tick. This access
+///   type is only available within [`buffered_tick`][1] or [`with_origin`][3]
+///   context. It does not require any synchronization, and may be the fastest
+///   option if mid-tick-up-to-date state is not required.
+/// - `cur`: Obtain the current state. This access type is always available. It
+///   requires a read lock on the component type, which adds a little bit of
+///   fixed overhead and prevents any parallel `mut` iteration over that
+///   component type.
+/// - `mut`: Obtain a mutable reference to the current state. This access type
+///   is only available "during a tick", i.e. in [`buffered_tick`][1] or
+///   [`unbuffered_tick`][2] context. It requires a write lock on the component
+///   type, which adds a little bit of fixed overhead and prevents any other
+///   parallel iteration over that component type.
+/// 
+/// If a component type is *optional*, you can enclose the type in `Option<>`.
+/// Entities that are missing some or all optional components will still be
+/// iterated upon. This is especially useful with `prev`, as it allows you to
+/// iterate even over entities that were spawned during this tick. The
+/// **first** component type **must not** be optional.
+/// 
+/// You can do multiple `ecs_iter!` over the same `EcsWorld` in parallel
+/// safely. `RwLock`s are used to ensure thread safety. *Iterating* in parallel
+/// is not supported *yet*. When first-class `System`s are added, they will
+/// include dynamic parallelism transparently, both between `System`s and
+/// within them. This will be done before 1.0.
+/// 
+/// [1]: trait.EcsWorldBufferedTick.html#tymethod.buffered_tick
+/// [2]: struct.EcsWorld.html#method.unbuffered_tick
+/// [3]: struct.EcsWorld.html#method.with_origin
+pub use psilo_ecs_procmacros::ecs_iter;
+
+/// Attempt to get the given components for a given entity ID. If it does not
+/// exist, or if it lacks some non-optional components, `None` will be
+/// returned.
+///
+/// Syntax is the same as [`ecs_iter!`](macro.ecs_iter.html), except that there
+/// is a second parameter, which is the entity ID to look for, and the entity
+/// ID is not returned.
+///
+/// ```rust ignore
+/// # // This test doesn't compile at the moment. Bug in `proc-macro-crate`
+/// # // considered responsible.
+/// # use psilo_ecs::{ecs_iter, EcsWorld};
+/// # #[derive(Clone)] struct FooComp {}
+/// # #[derive(Clone)] struct BarComp {}
+/// # let world = EcsWorld::with_blank_schema();
+/// # let eid = 456;
+/// if let Some(foo, bar) = ecs_get!(world, eid, mut FooComp, cur BarComp) {
+///     // do something with eid, foo, bar
+/// }
+/// ```
+///
+/// Never hardcode entity IDs. Only use entity IDs that were yielded from
+/// `ecs_iter!` or returned from [`ecs_spawn!`](macro.ecs_spawn.html).
+pub use psilo_ecs_procmacros::ecs_get;
+

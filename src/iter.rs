@@ -1,11 +1,13 @@
 //! This module contains glue to allow you to iterate over components. You
 //! really, really, really want to use the [ecs_iter!](macro.ecs_iter.html)
 //! macro instead of doing any of this yourself.
+#![doc(hidden)]
 
 use std::{
     any::TypeId,
     hint::unreachable_unchecked,
     marker::PhantomData,
+    ops::Deref,
 };
 
 use crate::{
@@ -53,6 +55,12 @@ pub struct ComponentBulkIterator<'a, const N: usize> {
     any_optional: bool,
 }
 
+pub struct SafeBulkIterator<'a, const N: usize, F, R>
+where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a {
+    inner: ComponentBulkIterator<'a, N>,
+    handler: F,
+}
+
 pub enum ComponentIterated<'a> {
     Missing,
     Shared(EntityId, *const u8, PhantomData<&'a EcHashMap>),
@@ -67,21 +75,36 @@ pub enum ComponentGotten<'a> {
 }
 
 impl<'a, const N: usize> ComponentBulkIterator<'a, N> {
-    /// Splits this iterator into two iterators, each of which will iterate
-    /// over a different half of the remaining buckets.
-    pub fn split<'b>(&'b mut self) -> (ComponentBulkIterator<'b, N>, ComponentBulkIterator<'b, N>) {
-        let mut iters = self.iterators.each_mut().map(|x| x.split());
-        let left = iters.each_mut().map(|x| ComponentIterator::take(&mut x.0));
-        let right = iters.each_mut().map(|x| ComponentIterator::take(&mut x.1));
-        (ComponentBulkIterator { iterators: left, optional: self.optional.clone(), any_optional: self.any_optional },
-            ComponentBulkIterator { iterators: right, optional: self.optional.clone(), any_optional: self.any_optional })
+    /* TODO: make it work */
+    /*
+    fn for_each_n<'b: 'a, F>(&'b mut self, max: EntityCount, f: F)
+    where F: Fn(ComponentBulkIterator<'b, N>) {
+        if self.rank() > max {
+            let mut iters = self.iterators.each_mut().map(|x| x.split());
+            let left = iters.each_mut().map(|x| ComponentIterator::take(&mut x.0));
+            let right = iters.each_mut().map(|x| ComponentIterator::take(&mut x.1));
+            f(ComponentBulkIterator { iterators: left, optional: self.optional.clone(), any_optional: self.any_optional });
+            f(ComponentBulkIterator { iterators: right, optional: self.optional.clone(), any_optional: self.any_optional });
+        }
+        else {
+            f(self)
+        }
     }
-    /// Returns the number of *buckets* covered by this iterator, not counting
-    /// buckets it has already passed over.
-    /// 
-    /// This is the MINIMUM rank of any of the iterated-upon components.
-    pub fn rank(&self) -> EntityCount {
+    */
+    fn rank(&self) -> EntityCount {
         self.iterators.iter().fold(EntityCount::MAX, |a, x| a.min(x.rank()))
+    }
+    /// Custom map function, to allow splitting into sub-iterators for use with
+    /// the `rayon` crate.
+    /// 
+    /// This is used in the implementation of `ecs_iter!` and should not be
+    /// used directly.
+    #[doc(hidden)]
+    pub fn custom_map<F, R>(self, handler: F)
+    -> SafeBulkIterator<'a, N, F, R>
+    where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a
+    {
+        SafeBulkIterator { inner: self, handler }
     }
 }
 
@@ -161,6 +184,64 @@ impl<'a, const N: usize> Iterator for ComponentBulkIterator<'a, N> {
         }
         None
     }
+}
+
+impl<'a, const N: usize, F, R> Iterator for SafeBulkIterator<'a, N, F, R>
+where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a {
+    type Item = R;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(&self.handler)
+    }
+}
+
+impl<'a, const N: usize, F, R> SafeBulkIterator<'a, N, F, R>
+where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a {
+    /// Returns the number of *buckets* covered by this iterator, not counting
+    /// buckets it has already passed over.
+    ///
+    /// This is the MINIMUM rank of any of the iterated-upon components.
+    pub fn rank(&self) -> EntityCount {
+        self.inner.rank()
+    }
+    /* TODO: make it work
+    /// Call the passed handler repeatedly, each time giving it an iterator
+    /// that will yield at most the given maximum number of entities. You could
+    /// spawn Rayon tasks for each one, for example.
+    ///
+    /// `max` should be a power of two.
+    pub fn for_each_n<'b: 'a, F2>(&'b mut self, max: EntityCount, f: F2)
+    where F2: Fn(SafeBulkIterator<'b, N, F, R>) {
+        self.inner.for_each_n(max, |iter| {
+            f(SafeBulkIterator { inner: iter, handler: self.handler.clone() })
+        });
+        /*
+        let mut inner = match self.inner.take() {
+            Some(x) => x,
+            None => return,
+        };
+        if inner.rank() <= max {
+            f(SafeBulkIterator { inner: Some(inner), handler: self.handler.clone() });
+        }
+        else {
+            let worst_case = (inner.rank() / max).trailing_zeros() + 1;
+            let mut stack = Vec::with_capacity(worst_case as usize);
+            let (left_iter, right_iter) = inner.split();
+            stack.push(left_iter);
+            stack.push(right_iter);
+            while let Some(popped) = stack.pop() {
+                if popped.rank() <= max {
+                    f(SafeBulkIterator { inner: Some(popped), handler: self.handler.clone() });
+                }
+                else {
+                    let (left_iter, right_iter) = popped.split();
+                    stack.push(right_iter);
+                    stack.push(left_iter);
+                }
+            }
+        }
+        */
+    }
+    */
 }
 
 impl<'a> ComponentIterator<'a> {
@@ -342,7 +423,8 @@ impl<'a> ComponentGotten<'a> {
 }
 
 impl crate::EcsWorld {
-    /// Don't call this directly! Use [ecs_iter!](macro.ecs_iter.html) instead.
+    /// Don't call this directly! Use [ecs_iter!](../macro.ecs_iter.html)
+    /// instead.
     #[doc(hidden)]
     pub fn iterate_on<'a, const N: usize>(&'a self, tuple: [ComponentAccess; N]) -> ComponentBulkIterator<'a, N> {
         let ret = ComponentBulkIterator {
@@ -474,77 +556,4 @@ impl crate::EcsWorld {
         }
         Some(iterated.map(|x| x.unwrap_or(ComponentGotten::Missing)))
     }
-}
-
-// TODO: proc macro :(
-#[macro_export]
-macro_rules! ecs_iter_accessor {
-    (prev_optional $wat:ty) => {
-        $crate::iter::ComponentAccess::Prev(std::any::TypeId::of::<$wat>(), true)
-    };
-    (cur_optional $wat:ty) => {
-        $crate::iter::ComponentAccess::Cur(std::any::TypeId::of::<$wat>(), true)
-    };
-    (mut_optional $wat:ty) => {
-        $crate::iter::ComponentAccess::Mut(std::any::TypeId::of::<$wat>(), true)
-    };
-    (prev $wat:ty) => {
-        $crate::iter::ComponentAccess::Prev(std::any::TypeId::of::<$wat>(), false)
-    };
-    (cur $wat:ty) => {
-        $crate::iter::ComponentAccess::Cur(std::any::TypeId::of::<$wat>(), false)
-    };
-    (mut $wat:ty) => {
-        $crate::iter::ComponentAccess::Mut(std::any::TypeId::of::<$wat>(), false)
-    };
-}
-
-#[macro_export]
-macro_rules! ecs_iter_iterated {
-    ($el:expr, prev_optional $wat:ty) => {
-        $el.unsafe_optional_shared::<$wat>()
-    };
-    ($el:expr, cur_optional $wat:ty) => {
-        $el.unsafe_optional_shared_gd::<$wat>()
-    };
-    ($el:expr, mut_optional $wat:ty) => {
-        $el.unsafe_optional_exclusive_gd::<$wat>()
-    };
-    ($el:expr, prev $wat:ty) => {
-        $el.unsafe_unwrap_shared::<$wat>()
-    };
-    ($el:expr, cur $wat:ty) => {
-        $el.unsafe_unwrap_shared_gd::<$wat>()
-    };
-    ($el:expr, mut $wat:ty) => {
-        $el.unsafe_unwrap_exclusive_gd::<$wat>()
-    };
-}
-
-#[macro_export]
-macro_rules! ecs_iter {
-    ($world:expr, $($comps:tt)+) => {
-        {
-            let world = $world.as_ref();
-            let iterants = $crate::ecs_iter_accessors!($($comps)+);
-            let iterator = world.iterate_on(iterants);
-            iterator.map(|(eid, array)| {
-                $crate::ecs_iterated_unfold!(eid, array, $($comps)+)
-            })
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! ecs_get {
-    ($world:expr, $eid:expr, $($comps:tt)+) => {
-        {
-            let world = $world.as_ref();
-            let iterants = $crate::ecs_iter_accessors!($($comps)+);
-            let found = world.get_entity($eid, iterants);
-            found.map(|array| {
-                $crate::ecs_gotten_unfold!(array, $($comps)+)
-            })
-        }
-    };
 }

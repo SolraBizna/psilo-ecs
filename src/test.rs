@@ -30,22 +30,25 @@ struct TestCompB {
     let ou = ecs_spawn!(world, TestCompB { alpha: 0, beta: 123 });
     let pu = ecs_spawn!(world, TestCompA(101112), TestCompB { alpha: 65535, beta: 789 });
     println!("{} {} {}", nu, ou, pu);
-    for (eid, a, b) in ecs_iter!(world, cur TestCompA, cur_optional TestCompB) {
+    for (eid, a, b) in ecs_iter!(world, cur TestCompA, cur Option<TestCompB>) {
         println!("Option option option! {}, {:?}, {:?}", eid, a, b);
     }
-    assert_eq!(ecs_iter!(world, cur TestCompA, cur_optional TestCompB).fold(0, |a,_| a+1), 2);
+    assert_eq!(ecs_iter!(world, cur TestCompA, cur Option<TestCompB>).fold(0, |a,_| a+1), 2);
 }
 
+/* This test no longer has a runtime panic. Now it doesn't compile. */
+/*
 #[test] #[should_panic] fn component_no_leading_optional() {
     let mut world = EcsWorld::with_blank_schema();
     let nu = ecs_spawn!(world, TestCompA(456));
     let ou = ecs_spawn!(world, TestCompB { alpha: 0, beta: 123 });
     let pu = ecs_spawn!(world, TestCompA(101112), TestCompB { alpha: 65535, beta: 789 });
     println!("{} {} {}", nu, ou, pu);
-    for (eid, a, b) in ecs_iter!(world, cur_optional TestCompA, cur_optional TestCompB) {
+    for (eid, a, b) in ecs_iter!(world, cur Option<TestCompA>, cur Option<TestCompB>) {
         println!("Option option option! {}, {:?}, {:?}", eid, a, b);
     }
 }
+*/
 
 #[test] fn zst() {
     let mut world = EcsWorld::with_blank_schema();
@@ -242,7 +245,7 @@ struct TestCompB {
         }
     }
     world.unbuffered_tick(|world| {
-        for (_, a, b) in ecs_iter!(world, mut TestCompA, mut_optional TestCompB) {
+        for (_, a, b) in ecs_iter!(world, mut TestCompA, mut Option<TestCompB>) {
             if let Some(b) = b {
                 a.0 -= 456;
                 b.alpha = 3; // pi
@@ -252,8 +255,8 @@ struct TestCompB {
             }
         }
     });
-    for (eid, _a, b) in ecs_iter!(world, cur TestCompA, cur_optional TestCompB) {
-        let (_alt_a, alt_b) = ecs_get!(world, eid, cur TestCompA, cur_optional TestCompB).unwrap();
+    for (eid, _a, b) in ecs_iter!(world, cur TestCompA, cur Option<TestCompB>) {
+        let (_alt_a, alt_b) = ecs_get!(world, eid, cur TestCompA, cur Option<TestCompB>).unwrap();
         assert_eq!(b.is_none(), alt_b.is_none());
     }
     let mut wrong = 0;
