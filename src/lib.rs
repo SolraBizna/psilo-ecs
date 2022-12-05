@@ -467,6 +467,12 @@ macro_rules! ecs_detach {
 /// is not supported *yet*. When first-class `System`s are added, they will
 /// include dynamic parallelism transparently, both between `System`s and
 /// within them. This will be done before 1.0.
+///
+/// **WARNING:**
+/// Due to the locking involved, and safety issues, you are not permitted to
+/// have multiple `ecs_iter!` or `ecs_get!` references to the same `mut T`.
+/// In debug builds, this will be detected and result in a panic. In release
+/// builds, this will deadlock!
 /// 
 /// [1]: trait.EcsWorldBufferedTick.html#tymethod.buffered_tick
 /// [2]: struct.EcsWorld.html#method.unbuffered_tick
@@ -475,10 +481,11 @@ pub use psilo_ecs_procmacros::ecs_iter;
 
 /// Attempt to get the given components for a given entity ID. If it does not
 /// exist, or if it lacks some non-optional components, `None` will be
-/// returned.
+/// returned. Often, but not always, it's better to accomplish the same thing
+/// using optional components in `ecs_iter`.
 ///
-/// Syntax is the same as [`ecs_iter!`](macro.ecs_iter.html), except that there
-/// is a second parameter, which is the entity ID to look for, and the entity
+/// Syntax is similar to [`ecs_iter!`](macro.ecs_iter.html). There is a second
+/// parameter, which is the entity ID to look for, and the entity
 /// ID is not returned.
 ///
 /// ```rust ignore
@@ -496,5 +503,11 @@ pub use psilo_ecs_procmacros::ecs_iter;
 ///
 /// Never hardcode entity IDs. Only use entity IDs that were yielded from
 /// `ecs_iter!` or returned from [`ecs_spawn!`](macro.ecs_spawn.html).
+///
+/// **WARNING:**
+/// Due to the locking involved, and safety issues, you are not permitted to
+/// have multiple `ecs_iter!` or `ecs_get!` references to the same `mut T`.
+/// In debug builds, this will be detected and result in a panic. In release
+/// builds, this will deadlock!
 pub use psilo_ecs_procmacros::ecs_get;
 
