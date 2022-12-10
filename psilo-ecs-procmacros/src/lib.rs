@@ -40,6 +40,26 @@ struct Accessor {
     span: Span,
 }
 
+impl Accessor {
+    fn unfolded(&self) -> TokenStream2 {
+        let level = &self.level;
+        let optional = &self.optional;
+        let typ = &self.typ;
+        let helper = match (level, optional) {
+            (AccessLevel::Prev, false) => "unsafe_unwrap_shared",
+            (AccessLevel::Cur, false) => "unsafe_unwrap_shared_gd",
+            (AccessLevel::Mut, false) => "unsafe_unwrap_exclusive_gd",
+            (AccessLevel::Prev, true) => "unsafe_optional_shared",
+            (AccessLevel::Cur, true) => "unsafe_optional_shared_gd",
+            (AccessLevel::Mut, true) => "unsafe_optional_exclusive_gd",
+        };
+        let helper = Ident::new(helper, Span::call_site());
+        quote!{
+            iter.next().unwrap().#helper::<#typ>()
+        }
+    }
+}
+
 impl Parse for Accessor {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let level_ident: Ident = input.call(Ident::parse_any)?;
@@ -152,21 +172,7 @@ fn make_unfolded(accessors: &[Accessor]) -> TokenStream2 {
         if i != 0 {
             ret.append(Punct::new(',', Spacing::Alone));
         }
-        let level = &accessor.level;
-        let optional = &accessor.optional;
-        let typ = &accessor.typ;
-        let helper = match (level, optional) {
-            (AccessLevel::Prev, false) => "unsafe_unwrap_shared",
-            (AccessLevel::Cur, false) => "unsafe_unwrap_shared_gd",
-            (AccessLevel::Mut, false) => "unsafe_unwrap_exclusive_gd",
-            (AccessLevel::Prev, true) => "unsafe_optional_shared",
-            (AccessLevel::Cur, true) => "unsafe_optional_shared_gd",
-            (AccessLevel::Mut, true) => "unsafe_optional_exclusive_gd",
-        };
-        let helper = Ident::new(helper, Span::call_site());
-        ret.append_all(quote!{
-            iter.next().unwrap().#helper::<#typ>()
-        });
+        ret.append_all(accessor.unfolded());
     }
     ret
 }
@@ -210,6 +216,41 @@ pub fn ecs_get(input: TokenStream) -> TokenStream {
                 let mut iter = array.into_iter();
                 unsafe { (#unfolded) }
             })
+        }
+    })
+}
+
+// TODO: this can be optimized significantly, probably won't speed up runtime
+// but would speed up compile
+#[proc_macro_error]
+#[proc_macro]
+pub fn ecs_singleton(input: TokenStream) -> TokenStream {
+    let mut comped = parse_macro_input!(input as Comped<1, 1>);
+    assert_eq!(comped.exprs.len(), 1);
+    assert_eq!(comped.accessors.len(), 1);
+    let world = comped.exprs.remove(0);
+    let iterants = make_iterants(&comped.accessors);
+    let unfolded = comped.accessors[0].unfolded();
+    let typ = &comped.accessors[0].typ;
+    let type_name = quote!{#typ}.to_string();
+    TokenStream::from(quote! {
+        {
+            let world = #world.as_ref();
+            let iterants = [#iterants];
+            let mut iterator = world.iterate_on(iterants)
+            .custom_map(|(_eid, array)| {
+                let mut iter = array.into_iter();
+                unsafe { #unfolded }
+            });
+            if let Some(result) = iterator.next() {
+                if cfg!(debug_assertions) && iterator.next().is_some() {
+                    panic!("Multiple instances of singleton component {:?}", #type_name);
+                }
+                result
+            }
+            else {
+                panic!("Missing singleton component {:?}", #type_name);
+            }
         }
     })
 }

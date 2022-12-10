@@ -290,3 +290,21 @@ struct TestCompB {
         panic!("{} wrongs!", wrong);
     }
 }
+
+#[test] #[should_panic] fn missing_singleton() {
+    let world = Arcow::new(EcsWorld::with_blank_schema());
+    let _failed = ecs_singleton!(world, cur TestCompA);
+}
+
+#[cfg(debug_assertions)] #[test] fn single_singleton() {
+    let mut world = Arcow::new(EcsWorld::with_blank_schema());
+    ecs_spawn!(world, TestCompA(456));
+    assert_eq!(ecs_singleton!(world, cur TestCompA).0, 456);
+}
+
+#[cfg(debug_assertions)] #[test] #[should_panic] fn double_singleton() {
+    let mut world = Arcow::new(EcsWorld::with_blank_schema());
+    ecs_spawn!(world, TestCompA(456));
+    ecs_spawn!(world, TestCompA(456));
+    let _failed = ecs_singleton!(world, cur TestCompA);
+}

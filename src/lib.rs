@@ -470,9 +470,9 @@ macro_rules! ecs_detach {
 ///
 /// **WARNING:**
 /// Due to the locking involved, and safety issues, you are not permitted to
-/// have multiple `ecs_iter!` or `ecs_get!` references to the same `mut T`.
-/// In debug builds, this will be detected and result in a panic. In release
-/// builds, this will deadlock!
+/// have multiple `ecs_iter!`, `ecs_get!`, or `ecs_singleton!` dealing with
+/// the same `mut T` type. In debug builds, this will be detected and result in
+/// a panic. In release builds, this will deadlock!
 /// 
 /// [1]: trait.EcsWorldBufferedTick.html#tymethod.buffered_tick
 /// [2]: struct.EcsWorld.html#method.unbuffered_tick
@@ -506,8 +506,34 @@ pub use psilo_ecs_procmacros::ecs_iter;
 ///
 /// **WARNING:**
 /// Due to the locking involved, and safety issues, you are not permitted to
-/// have multiple `ecs_iter!` or `ecs_get!` references to the same `mut T`.
-/// In debug builds, this will be detected and result in a panic. In release
-/// builds, this will deadlock!
+/// have multiple `ecs_iter!`, `ecs_get!`, or `ecs_singleton!` dealing with
+/// the same `mut T` type. In debug builds, this will be detected and result in
+/// a panic. In release builds, this will deadlock!
 pub use psilo_ecs_procmacros::ecs_get;
 
+/// Attempt to get a singleton component. Singleton components are components
+/// that only attach to one entity, and have some kind of global significance:
+/// physics systems, path caches, and the like.
+///
+/// Syntax is similar to [`ecs_iter!`](macro.ecs_iter.html), but with only one
+/// component allowed.
+///
+/// ```rust ignore
+/// # // This test doesn't compile at the moment. Bug in `proc-macro-crate`
+/// # // considered responsible.
+/// # use psilo_ecs::{ecs_iter, EcsWorld};
+/// # #[derive(Clone)] struct PhysicsLibComp {}
+/// # let world = EcsWorld::with_blank_schema();
+/// let physics = ecs_singleton!(world, mut PhysicsLibComp);
+/// // do something with physics
+/// ```
+///
+/// Will panic if there is not **exactly one** instance of that component in
+/// the world. (If there's not **exactly one**, then it's not a singleton.)
+///
+/// **WARNING:**
+/// Due to the locking involved, and safety issues, you are not permitted to
+/// have multiple `ecs_iter!`, `ecs_get!`, or `ecs_singleton!` dealing with
+/// the same `mut T` type. In debug builds, this will be detected and result in
+/// a panic. In release builds, this will deadlock!
+pub use psilo_ecs_procmacros::ecs_singleton;

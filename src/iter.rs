@@ -7,7 +7,6 @@ use std::{
     any::TypeId,
     hint::unreachable_unchecked,
     marker::PhantomData,
-    ops::Deref,
 };
 
 use crate::{
