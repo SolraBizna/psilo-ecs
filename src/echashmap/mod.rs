@@ -993,10 +993,26 @@ impl<T: Deref<Target=EcHashMap>> EcHashMapIter<T> {
         debug_assert!(self.next_entry > 0);
         self.next_entry -= 1;
     }
+    /// Returns a separate iterator that possibly borrows through an underlying
+    /// guard, and will iterate over the same things.
+    pub fn borrowthrough(&self) -> EcHashMapIter<&EcHashMap> {
+        EcHashMapIter {
+            map: self.map.deref(),
+            next_bucket: self.next_bucket,
+            next_entry: self.next_entry,
+            limit_bucket: self.limit_bucket,
+        }
+    }
+    /// Returns the number of *buckets* covered by this iterator, not counting
+    /// buckets it has already finished yielding from.
+    pub fn rank(&self) -> EntityCount { self.limit_bucket - self.next_bucket }
+}
+
+impl<'a> EcHashMapIter<&'a EcHashMap> {
     /// Splits this iterator into two iterators, each of which will iterate
     /// over a different half of the remaining buckets.
-    pub fn split<'a>(&'a self) -> (EcHashMapIter<&'a EcHashMap>, EcHashMapIter<&'a EcHashMap>) {
-        let r = self.map.deref();
+    pub fn split(&self) -> (EcHashMapIter<&'a EcHashMap>, EcHashMapIter<&'a EcHashMap>) {
+        let r = self.map;
         let split_bucket = (self.limit_bucket - self.next_bucket) / 2 + self.next_bucket;
         (EcHashMapIter {
             map: r,
@@ -1011,9 +1027,6 @@ impl<T: Deref<Target=EcHashMap>> EcHashMapIter<T> {
             limit_bucket: self.limit_bucket,
         })
     }
-    /// Returns the number of *buckets* covered by this iterator, not counting
-    /// buckets it has already finished yielding from.
-    pub fn rank(&self) -> EntityCount { self.limit_bucket - self.next_bucket }
 }
 
 unsafe impl<T: Deref<Target=EcHashMap>> Send for EcHashMapIter<T> {}
@@ -1046,31 +1059,46 @@ impl<T: DerefMut<Target=EcHashMap>> EcHashMapIterMut<T> {
         debug_assert!(self.next_entry > 0);
         self.next_entry -= 1;
     }
-    /// Splits this iterator into two iterators, each of which will iterate
-    /// over a different half of the remaining buckets.
-    pub fn split<'a>(&'a mut self) -> (EcHashMapIterMut<&'a mut EcHashMap>, EcHashMapIterMut<&'a mut EcHashMap>) {
-        let r = self.map.deref_mut();
-        let split_bucket = (self.limit_bucket - self.next_bucket) / 2 + self.next_bucket;
-        // These two references are used as slices into different subsets of
-        // the EcHashMap. The values they touch don't overlap, and they never
-        // mutate common fields. I *hope* this is enough to avoid breaking the
-        // aliasing rules.
-        (EcHashMapIterMut {
-            map: unsafe { (r as *mut EcHashMap).as_mut().unwrap() },
+    /// Returns a separate iterator that possibly borrows through an underlying
+    /// guard, and will iterate over the same things.
+    pub fn borrowthrough(&mut self) -> EcHashMapIterMut<&mut EcHashMap> {
+        EcHashMapIterMut {
+            map: self.map.deref_mut(),
             next_bucket: self.next_bucket,
             next_entry: self.next_entry,
-            limit_bucket: split_bucket,
-        },
-        EcHashMapIterMut {
-            map: r,
-            next_bucket: split_bucket,
-            next_entry: 0,
             limit_bucket: self.limit_bucket,
-        })
+        }
     }
     /// Returns the number of *buckets* covered by this iterator, not counting
     /// buckets it has already finished yielding from.
     pub fn rank(&self) -> EntityCount { self.limit_bucket - self.next_bucket }
 }
 
+impl<'a> EcHashMapIterMut<&'a mut EcHashMap> {
+    /// Splits this iterator into two iterators, each of which will iterate
+    /// over a different half of the remaining buckets.
+    pub fn split(&mut self) -> (EcHashMapIterMut<&'a mut EcHashMap>, EcHashMapIterMut<&'a mut EcHashMap>) {
+        let split_bucket = (self.limit_bucket - self.next_bucket) / 2 + self.next_bucket;
+        // These two references are used as slices into different subsets of
+        // the EcHashMap. The values they touch don't overlap, and they never
+        // mutate common fields. I *hope* this is enough to avoid breaking the
+        // aliasing rules.
+        (EcHashMapIterMut {
+            map: unsafe { (self.map as *mut EcHashMap).as_mut().unwrap() },
+            next_bucket: self.next_bucket,
+            next_entry: self.next_entry,
+            limit_bucket: split_bucket,
+        },
+        EcHashMapIterMut {
+            map: unsafe { (self.map as *mut EcHashMap).as_mut().unwrap() },
+            next_bucket: split_bucket,
+            next_entry: 0,
+            limit_bucket: self.limit_bucket,
+        })
+    }
+}
+
 unsafe impl<T: DerefMut<Target=EcHashMap>> Send for EcHashMapIterMut<T> {}
+
+unsafe impl Send for EcHashMap {}
+unsafe impl Sync for EcHashMap {}

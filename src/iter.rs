@@ -54,16 +54,17 @@ pub struct ComponentBulkIterator<'a, const N: usize> {
     any_optional: bool,
 }
 
-pub struct SafeBulkIterator<'a, const N: usize, F, R>
-where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a {
+pub struct SafeBulkIterator<'a, 'b, const N: usize, F, R>
+where F: Clone + Send + Sync + Fn((EntityId, [ComponentIterated<'b>; N])) -> R, R: 'b, 'a: 'b {
     inner: ComponentBulkIterator<'a, N>,
     handler: F,
+    _phantom: PhantomData<&'b ()>,
 }
 
 pub enum ComponentIterated<'a> {
     Missing,
     Shared(EntityId, *const u8, PhantomData<&'a EcHashMap>),
-    Exclusive(EntityId, *mut u8, PhantomData<&'a EcHashMap>),
+    Exclusive(EntityId, *mut u8, PhantomData<&'a mut EcHashMap>),
 }
 
 pub enum ComponentGotten<'a> {
@@ -74,22 +75,30 @@ pub enum ComponentGotten<'a> {
 }
 
 impl<'a, const N: usize> ComponentBulkIterator<'a, N> {
-    /* TODO: make it work */
-    /*
-    fn for_each_n<'b: 'a, F>(&'b mut self, max: EntityCount, f: F)
-    where F: Fn(ComponentBulkIterator<'b, N>) {
+    fn for_each_n<'b, F>(&'b mut self, max: EntityCount, f: F)
+    where F: Fn(ComponentBulkIterator<'b, N>), 'a: 'b {
         if self.rank() > max {
-            let mut iters = self.iterators.each_mut().map(|x| x.split());
-            let left = iters.each_mut().map(|x| ComponentIterator::take(&mut x.0));
-            let right = iters.each_mut().map(|x| ComponentIterator::take(&mut x.1));
-            f(ComponentBulkIterator { iterators: left, optional: self.optional.clone(), any_optional: self.any_optional });
-            f(ComponentBulkIterator { iterators: right, optional: self.optional.clone(), any_optional: self.any_optional });
+            // TODO: use with_capacity
+            let mut iterstack = vec![self.iterators.each_mut().map(|x| x.borrowthrough())];
+            while let Some(iterators) = iterstack.pop() {
+                let rank = iterators.iter().fold(EntityCount::MAX, |a, x| a.min(x.rank()));
+                if rank > max {
+                    let mut splat = iterators.map(|x| x.split());
+                    let left = splat.each_mut().map(|x| ComponentIterator::take(&mut x.0));
+                    let right = splat.each_mut().map(|x| ComponentIterator::take(&mut x.1));
+                    iterstack.push(right);
+                    iterstack.push(left);
+                }
+                else {
+                    f(ComponentBulkIterator { iterators, optional: self.optional.clone(), any_optional: self.any_optional });
+                }
+            }
         }
         else {
-            f(self)
+            let iterators = self.iterators.each_mut().map(|x| x.borrowthrough());
+            f(ComponentBulkIterator { iterators, optional: self.optional.clone(), any_optional: self.any_optional });
         }
     }
-    */
     fn rank(&self) -> EntityCount {
         self.iterators.iter().fold(EntityCount::MAX, |a, x| a.min(x.rank()))
     }
@@ -99,11 +108,11 @@ impl<'a, const N: usize> ComponentBulkIterator<'a, N> {
     /// This is used in the implementation of `ecs_iter!` and should not be
     /// used directly.
     #[doc(hidden)]
-    pub fn custom_map<F, R>(self, handler: F)
-    -> SafeBulkIterator<'a, N, F, R>
-    where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a
+    pub fn custom_map<'b, F, R>(self, handler: F)
+    -> SafeBulkIterator<'a, 'b, N, F, R>
+    where F: Clone + Send + Sync + Fn((EntityId, [ComponentIterated<'b>; N])) -> R, R: 'b, 'a: 'b
     {
-        SafeBulkIterator { inner: self, handler }
+        SafeBulkIterator { inner: self, handler, _phantom: PhantomData }
     }
 }
 
@@ -185,16 +194,16 @@ impl<'a, const N: usize> Iterator for ComponentBulkIterator<'a, N> {
     }
 }
 
-impl<'a, const N: usize, F, R> Iterator for SafeBulkIterator<'a, N, F, R>
-where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a {
+impl<'a, 'b, const N: usize, F, R> Iterator for SafeBulkIterator<'a, 'b, N, F, R>
+where F: Clone + Send + Sync + Fn((EntityId, [ComponentIterated<'b>; N])) -> R, R: 'b, 'a: 'b {
     type Item = R;
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(&self.handler)
     }
 }
 
-impl<'a, const N: usize, F, R> SafeBulkIterator<'a, N, F, R>
-where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a {
+impl<'a, 'b, const N: usize, F, R> SafeBulkIterator<'a, 'b, N, F, R>
+where F: Clone + Send + Sync + Fn((EntityId, [ComponentIterated<'b>; N])) -> R, R: 'b, 'a: 'b {
     /// Returns the number of *buckets* covered by this iterator, not counting
     /// buckets it has already passed over.
     ///
@@ -202,45 +211,26 @@ where F: 'a + Clone + Fn((EntityId, [ComponentIterated<'a>; N])) -> R, R: 'a {
     pub fn rank(&self) -> EntityCount {
         self.inner.rank()
     }
-    /* TODO: make it work
-    /// Call the passed handler repeatedly, each time giving it an iterator
-    /// that will yield at most the given maximum number of entities. You could
-    /// spawn Rayon tasks for each one, for example.
+    /// Iterate over entities in parallel, passing each iterated entity to the
+    /// given closure. The entities will be divided into chunks containing at
+    /// most `max` entities, and those chunks will be distributed to multiple
+    /// threads using Rayon.
     ///
     /// `max` should be a power of two.
-    pub fn for_each_n<'b: 'a, F2>(&'b mut self, max: EntityCount, f: F2)
-    where F2: Fn(SafeBulkIterator<'b, N, F, R>) {
-        self.inner.for_each_n(max, |iter| {
-            f(SafeBulkIterator { inner: iter, handler: self.handler.clone() })
+    #[cfg(feature="parallel")]
+    pub fn par_for_each_n<F2>(&'b mut self, max: EntityCount, f: F2)
+    where F2: Send + Sync + Fn(R), 'a: 'b {
+        rayon::scope(|scope| {
+            self.inner.for_each_n(max, |iter| {
+                scope.spawn(|_| {
+                    let iter = SafeBulkIterator { inner: iter, handler: &self.handler, _phantom: PhantomData };
+                    for x in iter {
+                        (f)(x)
+                    }
+                });
+            });
         });
-        /*
-        let mut inner = match self.inner.take() {
-            Some(x) => x,
-            None => return,
-        };
-        if inner.rank() <= max {
-            f(SafeBulkIterator { inner: Some(inner), handler: self.handler.clone() });
-        }
-        else {
-            let worst_case = (inner.rank() / max).trailing_zeros() + 1;
-            let mut stack = Vec::with_capacity(worst_case as usize);
-            let (left_iter, right_iter) = inner.split();
-            stack.push(left_iter);
-            stack.push(right_iter);
-            while let Some(popped) = stack.pop() {
-                if popped.rank() <= max {
-                    f(SafeBulkIterator { inner: Some(popped), handler: self.handler.clone() });
-                }
-                else {
-                    let (left_iter, right_iter) = popped.split();
-                    stack.push(right_iter);
-                    stack.push(left_iter);
-                }
-            }
-        }
-        */
     }
-    */
 }
 
 impl<'a> ComponentIterator<'a> {
@@ -258,23 +248,27 @@ impl<'a> ComponentIterator<'a> {
             ComponentIterator::Empty => (),
         }
     }
-    fn split<'b>(&'b mut self) -> (ComponentIterator<'b>, ComponentIterator<'b>) {
+    fn borrowthrough<'b>(&'b mut self) -> ComponentIterator<'b> where 'a: 'b {
+        match self {
+            ComponentIterator::Shared(x) => ComponentIterator::Shared(x.borrowthrough()),
+            ComponentIterator::Exclusive(x) => ComponentIterator::Exclusive(x.borrowthrough()),
+            ComponentIterator::SharedGd(x) => ComponentIterator::Shared(x.borrowthrough()),
+            ComponentIterator::ExclusiveGd(x) => ComponentIterator::Exclusive(x.borrowthrough()),
+            ComponentIterator::Empty => ComponentIterator::Empty,
+        }
+    }
+    fn split(self) -> (ComponentIterator<'a>, ComponentIterator<'a>) {
         match self {
             ComponentIterator::Shared(x) => {
                 let (left_iter, right_iter) = x.split();
                 (ComponentIterator::Shared(left_iter), ComponentIterator::Shared(right_iter))   
             },
-            ComponentIterator::Exclusive(x) => {
+            ComponentIterator::Exclusive(mut x) => {
                 let (left_iter, right_iter) = x.split();
                 (ComponentIterator::Exclusive(left_iter), ComponentIterator::Exclusive(right_iter))   
             },
-            ComponentIterator::SharedGd(x) => {
-                let (left_iter, right_iter) = x.split();
-                (ComponentIterator::Shared(left_iter), ComponentIterator::Shared(right_iter))   
-            },
-            ComponentIterator::ExclusiveGd(x) => {
-                let (left_iter, right_iter) = x.split();
-                (ComponentIterator::Exclusive(left_iter), ComponentIterator::Exclusive(right_iter))   
+            ComponentIterator::SharedGd(_) | ComponentIterator::ExclusiveGd(_) => {
+                panic!("ComponentIterator must be borrowthrough'd before being split!")
             },
             ComponentIterator::Empty => (ComponentIterator::Empty, ComponentIterator::Empty),
         }

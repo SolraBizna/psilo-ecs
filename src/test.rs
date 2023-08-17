@@ -291,6 +291,62 @@ struct TestCompB {
     }
 }
 
+#[test] fn optional_no_miss_parallel() {
+    let mut world = EcsWorld::with_blank_schema();
+    for n in 0 .. 65536 {
+        let blah = ecs_spawn!(world, TestCompA(456));
+        if n % 16 == 7 {
+            ecs_attach!(world, blah, TestCompB { alpha: 49151, beta: 1 });
+        }
+    }
+    world.unbuffered_tick(|world| {
+        let mut iter = ecs_iter!(world, mut TestCompA, mut Option<TestCompB>);
+        iter.par_for_each_n(256, |(_, a, b)| {
+            if let Some(b) = b {
+                a.0 -= 456;
+                b.alpha = 3; // pi
+            }
+            else {
+                a.0 -= 123;
+            }
+        });
+    });
+    for (eid, _a, b) in ecs_iter!(world, cur TestCompA, cur Option<TestCompB>) {
+        let (_alt_a, alt_b) = ecs_get!(world, eid, cur TestCompA, cur Option<TestCompB>).unwrap();
+        assert_eq!(b.is_none(), alt_b.is_none());
+    }
+    let mut wrong = 0;
+    for (eid, a) in ecs_iter!(world, cur TestCompA) {
+        match ecs_get!(world, eid, cur TestCompB) {
+            None => {
+                if a.0 == 333 {
+                    // OK
+                }
+                else {
+                    eprintln!("{}のa should be 333, is {}", eid, a.0);
+                    wrong += 1;
+                }
+            },
+            Some(b) => {
+                if a.0 == 0 {
+                    // OK
+                }
+                else {
+                    eprintln!("{}のa should be 0, is {}", eid, a.0);
+                    wrong += 1;
+                }
+                if b.alpha != 3 {
+                    eprintln!("{}のb.alpha should be 3, is {}", eid, b.alpha);
+                    wrong += 1;
+                }
+            },
+        }
+    }
+    if wrong > 0 {
+        panic!("{} wrongs!", wrong);
+    }
+}
+
 #[test] #[should_panic] fn missing_singleton() {
     let world = Arcow::new(EcsWorld::with_blank_schema());
     let _failed = ecs_singleton!(world, cur TestCompA);

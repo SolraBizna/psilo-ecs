@@ -11,9 +11,11 @@ parking_lot = "0.12"
 primal = {version = "0.2", optional = true}
 rand = {version = "0.8.5", optional = true}
 psilo-ecs-procmacros = {path = "psilo-ecs-procmacros"}
+rayon = {version = "1.6", optional = true}
 
 [features]
-default = []
+default = ["parallel"]
+parallel = ["rayon"]
 # Remove some runtime checks for extra speeeeeeeed
 gotta-go-fast = []
 # Use usize instead of u32 for offsets and sizes in EcHashMap.

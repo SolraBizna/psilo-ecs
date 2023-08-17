@@ -1,4 +1,4 @@
-#![feature(alloc_layout_extra, array_methods, core_intrinsics, fn_traits, hash_drain_filter, unboxed_closures)]
+#![feature(alloc_layout_extra, array_methods, core_intrinsics, fn_traits, unboxed_closures)]
 
 use std::{
     any::TypeId,
